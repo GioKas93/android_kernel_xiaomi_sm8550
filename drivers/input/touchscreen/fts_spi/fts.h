@@ -43,6 +43,12 @@
 #include <linux/sched.h>
 #include <uapi/linux/sched/types.h>
 
+#define FTS_XIAOMI_TOUCHFEATURE
+
+#ifdef FTS_XIAOMI_TOUCHFEATURE
+#include "../xiaomi/xiaomi_touch.h"
+#endif
+
 /****************** CONFIGURATION SECTION ******************/
 /** @defgroup conf_section	 Driver Configuration Section
 * Settings of the driver code in order to suit the HW set up and the application behavior
@@ -50,13 +56,23 @@
 */
 
 /**** CODE CONFIGURATION ****/
+#ifdef CONFIG_TOUCHSCREEN_ST_FTS_V521_SPI_SECONDARY
+#define FTS_TS_DRV_NAME "fts-sec" /*driver name*/
+#else
 #define FTS_TS_DRV_NAME "fts" /*driver name*/
+#endif
 #define FTS_TS_DRV_VERSION "5.2.4.1" /*driver version string format*/
 #define FTS_TS_DRV_VER 0x05020401 /*driver version u32 format*/
 
+#ifdef CONFIG_TOUCHSCREEN_ST_FTS_V521_SPI_SECONDARY
+#define PINCTRL_STATE_ACTIVE "pmx_ts_sec_active"
+#define PINCTRL_STATE_SUSPEND "pmx_ts_sec_suspend"
+#define PINCTRL_STATE_RELEASE "pmx_ts_sec_release"
+#else
 #define PINCTRL_STATE_ACTIVE "pmx_ts_active"
 #define PINCTRL_STATE_SUSPEND "pmx_ts_suspend"
 #define PINCTRL_STATE_RELEASE "pmx_ts_release"
+#endif
 
 /*** save power mode ***/
 #define FTS_POWER_SAVE_MODE
@@ -82,7 +98,6 @@
 #define LIMITS_ARRAY_NAME myArray2
 #endif
 
-#define FTS_XIAOMI_TOUCHFEATURE
 #define FTS_FOD_AREA_REPORT
 #define FTS_DEBUG_FS
 
@@ -203,6 +218,7 @@ struct fts_hw_platform_data {
 	int (*power)(bool on);
 	int irq_gpio;
 	int reset_gpio;
+	int avdd_gpio;
 	unsigned long irq_flags;
 	unsigned int x_max;
 	unsigned int y_max;
@@ -261,7 +277,11 @@ struct fts_hw_platform_data {
  * Forward declaration
  */
 struct fts_ts_info;
+#ifdef CONFIG_TOUCHSCREEN_ST_FTS_V521_SPI_SECONDARY
+extern char tag[12];
+#else
 extern char tag[8];
+#endif
 
 /*
  * Dispatch event handler
@@ -418,9 +438,6 @@ struct fts_ts_info {
 	struct mutex fod_mutex;
 	struct mutex cmd_update_mutex;
 	bool fod_pressed;
-	bool prox_sensor_changed;
-	bool prox_sensor_switch;
-	bool palm_sensor_switch;
 	bool enable_touch_raw;
 	bool enable_touch_delta;
 	bool enable_thp_fw;
@@ -451,6 +468,8 @@ struct fts_ts_info {
 	struct mutex charge_lock;
 	int nonui_status;
 	bool gpio_has_request;
+
+	struct xiaomi_touch_interface xiaomi_touch;
 };
 
 extern int fts_chip_powercycle(struct fts_ts_info *info);
@@ -466,10 +485,5 @@ bool fts_is_infod(void);
 #endif
 void fts_restore_regvalues(void);
 const char *fts_get_limit(struct fts_ts_info *info);
-#ifdef FTS_XIAOMI_TOUCHFEATURE
-int fts_palm_sensor_cmd(int input);
-int fts_prox_sensor_cmd(int input);
-bool fts_touchmode_edgefilter(unsigned int touch_id, int x, int y);
-#endif
 #endif
 int fts_enable_thp_selfcap_scan(int en);

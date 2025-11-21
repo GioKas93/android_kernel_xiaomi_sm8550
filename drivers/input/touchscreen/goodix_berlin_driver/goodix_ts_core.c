@@ -28,15 +28,6 @@
 
 #include "goodix_ts_core.h"
 
-static struct xiaomi_touch_interface xiaomi_touch_interfaces;
-struct goodix_ts_core *ts_core;
-
-#define GOODIX_DEFAULT_FW_PROPERTY	"goodix,firmware-name"
-#define GOODIX_DEFAULT_CFG_PROPERTY	"goodix,config-name"
-#define GOODIX_FW_PROPERTY_A		"goodix,firmware-namea"
-#define GOODIX_FW_PROPERTY_B		"goodix,firmware-nameb"
-#define GOODIX_CFG_PROPERTY_A		"goodix,config-namea"
-#define GOODIX_CFG_PROPERTY_B		"goodix,config-nameb"
 #define GOODIX_DEFAULT_CFG_NAME		"goodix_cfg_group.cfg"
 #define GOOIDX_INPUT_PHYS			"goodix_ts/input0"
 
@@ -958,6 +949,45 @@ int goodix_ts_blocking_notify(enum ts_notify_event evt, void *v)
 
 #if IS_ENABLED(CONFIG_OF)
 /**
+ * goodix_check_ts_id_gpio - check if the touch driver should be
+ *                           used based of touch screen ID GPIO
+ * @dev: pointer to device
+ * @node: devicetree node
+ * return: 0 - driver should be used, <0 driver should not be used
+ */
+static int goodix_check_ts_id_gpio(
+	struct device *dev,
+	struct device_node *node)
+{
+	int gpio, gpio_value, ret;
+	u8 match_value;
+
+	ret = of_property_read_u8(node, "goodix,ts-id-gpio-match-value",
+			&match_value);
+	if (ret < 0)
+		return 0;
+
+	gpio = of_get_named_gpio(node, "goodix,ts-id-gpio", 0);
+	if (gpio < 0)
+		return 0;
+
+	ret = devm_gpio_request_one(dev, gpio, GPIOF_IN, "LCD_ID_DET1");
+	if (gpio < 0)
+		return -EINVAL;
+
+	gpio_value = gpio_get_value(gpio);
+
+	ts_info("ts id gpio value=%d\n", gpio_value);
+
+	if (match_value != gpio_value) {
+		ts_err("ts id gpio value mismatch!\n");
+		return -ENODEV;
+	}
+
+	return 0;
+}
+
+/**
  * goodix_parse_dt_resolution - parse resolution from dt
  * @node: devicetree node
  * @board_data: pointer to board data structure
@@ -1013,15 +1043,10 @@ static int goodix_parse_dt_resolution(struct device_node *node,
  * return: 0 - no error, <0 error
  */
 static int goodix_parse_dt(struct device_node *node,
-	struct device *dev,
 	struct goodix_ts_board_data *board_data)
 {
 	const char *name_tmp;
-	const char *firmware_property = GOODIX_DEFAULT_FW_PROPERTY;
-	const char *config_property = GOODIX_DEFAULT_CFG_PROPERTY;
 	int r;
-	int gpio_a;
-	int gpio_b;
 
 	if (!board_data) {
 		ts_err("invalid board data");
@@ -1095,45 +1120,8 @@ static int goodix_parse_dt(struct device_node *node,
 				sizeof(board_data->iovdd_name));
 	}
 
-	/* get panel ID GPIOs */
-	board_data->panel_id_gpio_a = of_get_named_gpio(node, "goodix,panel-id-gpio-a", 0);
-	if (board_data->panel_id_gpio_a < 0)
-		board_data->panel_id_gpio_a = 0;
-
-	board_data->panel_id_gpio_b = of_get_named_gpio(node, "goodix,panel-id-gpio-b", 0);
-	if (board_data->panel_id_gpio_b < 0)
-		board_data->panel_id_gpio_b = 0;
-
-	/* check panel ID GPIOs */
-	if (board_data->panel_id_gpio_a && board_data->panel_id_gpio_b) {
-		r = devm_gpio_request_one(dev, board_data->panel_id_gpio_a,
-				GPIOF_IN, "LCD_ID_DET1");
-		if (board_data->panel_id_gpio_a < 0)
-			return -EINVAL;
-
-		r = devm_gpio_request_one(dev, board_data->panel_id_gpio_b,
-				GPIOF_IN, "LCD_ID_DET2");
-		if (board_data->panel_id_gpio_b < 0)
-			return -EINVAL;
-
-		gpio_a = gpio_get_value(board_data->panel_id_gpio_a);
-		gpio_b = gpio_get_value(board_data->panel_id_gpio_b);
-		ts_info("gpio_a=%d, gpio_b=%d\n", gpio_a, gpio_b);
-
-		/* not at least one GPIO down? unsupported panel */
-		if (gpio_a && gpio_b)
-			return -ENOTSUPP;
-		else if (!gpio_a) {
-			firmware_property = GOODIX_FW_PROPERTY_A;
-			config_property = GOODIX_CFG_PROPERTY_A;
-		} else if (!gpio_b) {
-			firmware_property = GOODIX_FW_PROPERTY_B;
-			config_property = GOODIX_CFG_PROPERTY_B;
-		}
-	}
-
 	/* get firmware file name */
-	r = of_property_read_string(node, firmware_property, &name_tmp);
+	r = of_property_read_string(node, "goodix,firmware-name", &name_tmp);
 	if (!r) {
 		ts_info("firmware name from dt: %s", name_tmp);
 		strlcpy(board_data->fw_name,
@@ -1147,7 +1135,7 @@ static int goodix_parse_dt(struct device_node *node,
 	}
 
 	/* get config file name */
-	r = of_property_read_string(node, config_property, &name_tmp);
+	r = of_property_read_string(node, "goodix,config-name", &name_tmp);
 	if (!r) {
 		ts_info("config name from dt: %s", name_tmp);
 		strlcpy(board_data->cfg_bin_name, name_tmp,
@@ -1873,7 +1861,6 @@ static int goodix_ts_suspend(struct goodix_ts_core *core_data)
 
 out:
 	goodix_ts_release_connects(core_data);
-	xiaomi_touch_set_suspend_state(1);
 	ts_info("Suspend end");
 	return 0;
 }
@@ -1949,9 +1936,11 @@ out:
 	hw_ops->irq_enable(core_data, true);
 	/* open esd */
 	goodix_ts_blocking_notify(NOTIFY_RESUME, NULL);
-	xiaomi_touch_set_suspend_state(0);
 	if (core_data->board_data.support_thp_fw) {
 		core_data->hw_ops->set_coor_mode(core_data);
+	}
+	if (core_data->high_report_rate) {
+		core_data->hw_ops->switch_report_rate(core_data, true);
 	}
 	ts_info("Resume end");
 	return 0;
@@ -1967,7 +1956,8 @@ static void goodix_resume_work(struct work_struct *work)
 static void goodix_set_gesture_work(struct work_struct *work)
 {
 	struct delayed_work *dwork = to_delayed_work(work);
-	struct goodix_ts_core *core_data = container_of(dwork, struct goodix_ts_core, gesture_work);
+	struct goodix_ts_core *core_data =
+		container_of(dwork, struct goodix_ts_core, gesture_work);
 	struct goodix_ts_hw_ops *hw_ops = core_data->hw_ops;
 	unsigned int target_gesture_type;
 	int res;
@@ -1979,16 +1969,21 @@ static void goodix_set_gesture_work(struct work_struct *work)
 
 	pm_stay_awake(core_data->bus->dev);
 
-	target_gesture_type = core_data->nonui_enabled ? 0 : core_data->gesture_type;
+	target_gesture_type =
+		core_data->nonui_enabled ? 0 : core_data->gesture_type;
 
 	if (target_gesture_type == 0) {
-		disable_irq_wake(core_data->irq);
 		hw_ops->irq_enable(core_data, false);
 		hw_ops->gesture(core_data, 0);
 		goto exit;
 	}
 
-	hw_ops->reset(core_data, GOODIX_NORMAL_RESET_DELAY_MS);
+	res = hw_ops->reset(core_data, GOODIX_NORMAL_RESET_DELAY_MS);
+	if (res) {
+		ts_err("reset failed during gesture works");
+		goto exit;
+	}
+
 	res = hw_ops->gesture(core_data, target_gesture_type);
 	if (res) {
 		ts_err("failed enter gesture mode");
@@ -1997,72 +1992,72 @@ static void goodix_set_gesture_work(struct work_struct *work)
 		ts_err("enter gesture mode");
 	}
 	hw_ops->irq_enable(core_data, true);
-	enable_irq_wake(core_data->irq);
 
 exit:
 	pm_relax(core_data->bus->dev);
 }
 
-static int goodix_set_cur_value(int mode, int value)
+static int goodix_set_cur_value(void *private, enum touch_mode mode, int value)
 {
-	ts_debug("mode: %d, value: %d", mode, value);
+	struct goodix_ts_core *ts_core = private;
 
-	if (!ts_core || value < 0) return 0;
-
+	ts_debug("set mode: %d, value: %d", mode, value);
 	switch (mode) {
-		case Touch_Doubletap_Mode:
-			if (value)
-				ts_core->gesture_type |= GESTURE_DOUBLE_TAP;
-			else
-				ts_core->gesture_type &= ~GESTURE_DOUBLE_TAP;
-			break;
-		case Touch_Singletap_Gesture:
-			if (value)
-				ts_core->gesture_type |= GESTURE_SINGLE_TAP;
-			else
-				ts_core->gesture_type &= ~GESTURE_SINGLE_TAP;
-			break;
-		case Touch_Fod_Longpress_Gesture:
-			if (value)
-				ts_core->gesture_type |= GESTURE_FOD_PRESS;
-			else
-				ts_core->gesture_type &= ~GESTURE_FOD_PRESS;
-			break;
-		case Touch_Nonui_Mode:
-			ts_core->nonui_enabled = value != 0;
-			break;
-		case THP_FOD_DOWNUP_CTL:
-			update_fod_press_status(value != 0);
-			return 0;
-		default:
-			ts_err("handler got mode %d with value %d, not implemented", mode, value);
-			return 0;
+	case TOUCH_MODE_DOUBLETAP_GESTURE:
+		if (value)
+			ts_core->gesture_type |= GESTURE_DOUBLE_TAP;
+		else
+			ts_core->gesture_type &= ~GESTURE_DOUBLE_TAP;
+		break;
+	case TOUCH_MODE_SINGLETAP_GESTURE:
+		if (value)
+			ts_core->gesture_type |= GESTURE_SINGLE_TAP;
+		else
+			ts_core->gesture_type &= ~GESTURE_SINGLE_TAP;
+		break;
+	case TOUCH_MODE_FOD_PRESS_GESTURE:
+		if (value)
+			ts_core->gesture_type |= GESTURE_FOD_PRESS;
+		else
+			ts_core->gesture_type &= ~GESTURE_FOD_PRESS;
+		break;
+	case TOUCH_MODE_NONUI_MODE:
+		ts_core->nonui_enabled = value != 0;
+		break;
+	case TOUCH_MODE_REPORT_RATE:
+		ts_core->hw_ops->switch_report_rate(ts_core, value);
+		goto exit;
+	default:
+		ts_err("handler got mode %d with value %d, not implemented",
+		       mode, value);
+		return -EINVAL;
 	}
 
-	queue_delayed_work(ts_core->gesture_wq, &ts_core->gesture_work, msecs_to_jiffies(GOODIX_NORMAL_GESTURE_DELAY_MS));
+	queue_delayed_work(ts_core->gesture_wq, &ts_core->gesture_work,
+			   msecs_to_jiffies(GOODIX_NORMAL_GESTURE_DELAY_MS));
 
+exit:
 	return 0;
 }
-
-static int goodix_get_mode_value(int mode, int value_type)
+static int goodix_get_mode_value(void *private, enum touch_mode mode)
 {
-	ts_debug("get mode: %d, value_type: %d", mode, value_type);
+	struct goodix_ts_core *ts_core = private;
 
-	if (!ts_core) return -1;
-
+	ts_debug("get mode: %d", mode);
 	switch (mode) {
-		case Touch_Doubletap_Mode:
-			return (ts_core->gesture_type & GESTURE_DOUBLE_TAP) != 0;
-		case Touch_Singletap_Gesture:
-			return (ts_core->gesture_type & GESTURE_SINGLE_TAP) != 0;
-		case Touch_Fod_Longpress_Gesture:
-			return (ts_core->gesture_type & GESTURE_FOD_PRESS) != 0;
-		case Touch_Nonui_Mode:
-			return ts_core->nonui_enabled ? 2 : 0;
-		default:
-			ts_err("handler got mode %d with value_type %d, not implemented", mode, value_type);
-			return -1;
+	case TOUCH_MODE_DOUBLETAP_GESTURE:
+		return (ts_core->gesture_type & GESTURE_DOUBLE_TAP) != 0;
+	case TOUCH_MODE_SINGLETAP_GESTURE:
+		return (ts_core->gesture_type & GESTURE_SINGLE_TAP) != 0;
+	case TOUCH_MODE_FOD_PRESS_GESTURE:
+		return (ts_core->gesture_type & GESTURE_FOD_PRESS) != 0;
+	case TOUCH_MODE_NONUI_MODE:
+		return ts_core->nonui_enabled ? 2 : 0;
+	default:
+		ts_err("handler got mode %d, not implemented", mode);
+		return -EINVAL;
 	}
+	return 0;
 }
 
 #if defined(CONFIG_DRM)
@@ -2195,15 +2190,6 @@ static int goodix_generic_noti_callback(struct notifier_block *self,
 		break;
 	}
 	return 0;
-}
-
-void xiaomi_touch_init(void)
-{
-	memset(&xiaomi_touch_interfaces, 0x00,
-			sizeof(struct xiaomi_touch_interface));
-	xiaomi_touch_interfaces.setModeValue = goodix_set_cur_value;
-	xiaomi_touch_interfaces.getModeValue = goodix_get_mode_value;
-	xiaomitouch_register_modedata(0, &xiaomi_touch_interfaces);
 }
 
 int goodix_ts_stage2_init(struct goodix_ts_core *cd)
@@ -2416,6 +2402,19 @@ static int goodix_start_later_init(struct goodix_ts_core *ts_core)
 	return 0;
 }
 
+static void xiaomi_touch_init(struct goodix_ts_core *ts_core)
+{
+	ts_core->xiaomi_touch.set_mode_value = goodix_set_cur_value;
+	ts_core->xiaomi_touch.get_mode_value = goodix_get_mode_value;
+	ts_core->xiaomi_touch.private = ts_core;
+	register_xiaomi_touch_client(TOUCH_ID_PRIMARY, &ts_core->xiaomi_touch);
+}
+
+static void xiaomi_touch_deinit(struct goodix_ts_core *ts_core)
+{
+	unregister_xiaomi_touch_client(TOUCH_ID_PRIMARY);
+}
+
 #if defined(CONFIG_DRM)
 static int goodix_check_dt(struct device_node *np)
 {
@@ -2507,6 +2506,10 @@ static int goodix_ts_probe(struct platform_device *pdev)
 	node = bus_interface->dev->of_node;
 
 #if defined(CONFIG_DRM)
+	ret = goodix_check_ts_id_gpio(&pdev->dev, node);
+	if (ret < 0)
+		return ret;
+
 	ret = goodix_check_dt(node);
 	if (ret == -EPROBE_DEFER)
 		return ret;
@@ -2530,11 +2533,8 @@ static int goodix_ts_probe(struct platform_device *pdev)
 
 	if (IS_ENABLED(CONFIG_OF) && bus_interface->dev->of_node) {
 		/* parse devicetree property */
-		ret = goodix_parse_dt(node, &pdev->dev, &core_data->board_data);
-		if (ret == -ENOTSUPP) {
-			ts_info("unsupported touch panel\n");
-			return -ENOTSUPP;
-		} else if (ret) {
+		ret = goodix_parse_dt(node, &core_data->board_data);
+		if (ret) {
 			ts_err("failed parse device info form dts, %d", ret);
 			return -EINVAL;
 		}
@@ -2588,13 +2588,11 @@ static int goodix_ts_probe(struct platform_device *pdev)
 	core_data->init_stage = CORE_INIT_STAGE1;
 	goodix_modules.core_data = core_data;
 	core_module_prob_sate = CORE_MODULE_PROB_SUCCESS;
-	ts_core = core_data;
-
-	/* xiaomi touch init */
-	xiaomi_touch_init();
 
 	/* Try start a thread to get config-bin info */
 	goodix_start_later_init(core_data);
+
+	xiaomi_touch_init(core_data);
 
 	ts_info("goodix_ts_core probe success");
 	return 0;
@@ -2612,6 +2610,7 @@ static int goodix_ts_remove(struct platform_device *pdev)
 	struct goodix_ts_hw_ops *hw_ops = core_data->hw_ops;
 	struct goodix_ts_esd *ts_esd = &core_data->ts_esd;
 
+	xiaomi_touch_deinit(core_data);
 	goodix_ts_unregister_notifier(&core_data->ts_notifier);
 	goodix_tools_exit();
 
@@ -2640,8 +2639,6 @@ static int goodix_ts_remove(struct platform_device *pdev)
 		goodix_ts_procfs_exit(core_data);
 		goodix_ts_power_off(core_data);
 	}
-
-	ts_core = NULL;
 
 	return 0;
 }

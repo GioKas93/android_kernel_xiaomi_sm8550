@@ -235,12 +235,15 @@ static int gsx_gesture_ist(struct goodix_ts_core *cd,
 	struct goodix_ext_module *module)
 {
 	struct goodix_ts_hw_ops *hw_ops = cd->hw_ops;
-	struct goodix_ts_event gs_event = {0};
+	struct goodix_ts_event gs_event = { 0 };
 	int ret;
 
-	ts_debug("gsx_gesture_ist called, gesture type is %d, nonui enabled is %d", cd->gesture_type, cd->nonui_enabled);
+	ts_debug(
+		"gsx_gesture_ist called, gesture type is %d, nonui enabled is %d",
+		cd->gesture_type, cd->nonui_enabled);
 
-	if (atomic_read(&cd->suspended) == 0 || cd->gesture_type == 0 || cd->nonui_enabled)
+	if (atomic_read(&cd->suspended) == 0 || cd->gesture_type == 0 ||
+	    cd->nonui_enabled)
 		return EVT_CONTINUE;
 
 	ret = hw_ops->event_handler(cd, &gs_event);
@@ -259,7 +262,7 @@ static int gsx_gesture_ist(struct goodix_ts_core *cd,
 	case GOODIX_GESTURE_SINGLE_TAP:
 		if (cd->gesture_type & GESTURE_SINGLE_TAP) {
 			ts_info("get SINGLE-TAP gesture");
-			notify_gesture_single_tap();
+			notify_oneshot_sensor(ONESHOT_SENSOR_SINGLE_TAP, 1);
 		} else {
 			ts_debug("not enable SINGLE-TAP");
 		}
@@ -267,7 +270,7 @@ static int gsx_gesture_ist(struct goodix_ts_core *cd,
 	case GOODIX_GESTURE_DOUBLE_TAP:
 		if (cd->gesture_type & GESTURE_DOUBLE_TAP) {
 			ts_info("get DOUBLE-TAP gesture");
-			notify_gesture_double_tap();
+			notify_oneshot_sensor(ONESHOT_SENSOR_DOUBLE_TAP, 1);
 		} else {
 			ts_debug("not enable DOUBLE-TAP");
 		}
@@ -275,7 +278,7 @@ static int gsx_gesture_ist(struct goodix_ts_core *cd,
 	case GOODIX_GESTURE_FOD_DOWN:
 		if (cd->gesture_type & GESTURE_FOD_PRESS) {
 			ts_info("get FOD-DOWN gesture");
-			update_fod_press_status(1);
+			notify_oneshot_sensor(ONESHOT_SENSOR_FOD_PRESS, 1);
 		} else {
 			ts_debug("not enable FOD-DOWN");
 		}
@@ -283,7 +286,7 @@ static int gsx_gesture_ist(struct goodix_ts_core *cd,
 	case GOODIX_GESTURE_FOD_UP:
 		if (cd->gesture_type & GESTURE_FOD_PRESS) {
 			ts_info("get FOD-UP gesture");
-			update_fod_press_status(0);
+			notify_oneshot_sensor(ONESHOT_SENSOR_FOD_PRESS, 0);
 		} else {
 			ts_debug("not enable FOD-UP");
 		}

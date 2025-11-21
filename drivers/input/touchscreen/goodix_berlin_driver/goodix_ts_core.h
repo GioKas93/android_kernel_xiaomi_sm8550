@@ -56,7 +56,7 @@
 #define GOODIX_GESTURE_DATA_LEN			16
 
 #define GOODIX_NORMAL_RESET_DELAY_MS	100
-#define GOODIX_NORMAL_GESTURE_DELAY_MS	300
+#define GOODIX_NORMAL_GESTURE_DELAY_MS 300
 #define GOODIX_HOLD_CPU_RESET_DELAY_MS  5
 
 #define GOODIX_RETRY_3					3
@@ -300,8 +300,6 @@ struct goodix_ts_board_data {
 	int irq_gpio;
 	int avdd_gpio;
 	int iovdd_gpio;
-	int panel_id_gpio_a;
-	int panel_id_gpio_b;
 	unsigned int  irq_flags;
 
 	unsigned int swap_axis;
@@ -467,6 +465,7 @@ struct goodix_ts_hw_ops {
 	int (*get_capacitance_data)(struct goodix_ts_core *cd,
 			struct ts_rawdata_info *info);
 	int (*set_coor_mode)(struct goodix_ts_core *cd);
+	int (*switch_report_rate)(struct goodix_ts_core *cd, bool high);
 };
 
 /*
@@ -554,10 +553,13 @@ struct goodix_ts_core {
 	struct work_struct resume_work;
 	struct work_struct suspend_work;
 
+	struct xiaomi_touch_interface xiaomi_touch;
+
 	struct workqueue_struct *gesture_wq;
 	struct delayed_work gesture_work;
 
 	bool nonui_enabled;
+	bool high_report_rate;
 };
 
 /* external module structures */
